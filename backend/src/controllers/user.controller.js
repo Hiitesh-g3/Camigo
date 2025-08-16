@@ -4,17 +4,28 @@ const User = require("../../models/User");
 async function getRecommendedUsers(req, res) {
   try {
     const currentUserId = req.user._id;
-    const currentUser = req.user;
+
+    // Fetch full user (with friends field)
+    const currentUser = await User.findById(currentUserId).lean();
+
+    if (!currentUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // If no friends, fallback to empty array
+    const friendIds = (currentUser.friends || []).map(friend =>
+      friend._id ? friend._id.toString() : friend.toString()
+    );
 
     const recommendedUsers = await User.find({
       $and: [
-        { _id: { $ne: currentUserId } }, // Exclude current user
-        { _id: { $nin: currentUser.friends } }, // Exclude friends
-        { isOnBoarded: true }, // Only include users who are onboarded
+        { _id: { $ne: currentUserId } },  // Exclude current user
+        { _id: { $nin: friendIds } },     // Exclude friends
+        { isOnBoarded: true },            // Only onboarded users
       ],
     });
 
-    console.log("Recommended users fetched successfully:", recommendedUsers);
+    
 
     res.status(200).json({ recommendedUsers });
   } catch (error) {
@@ -23,27 +34,34 @@ async function getRecommendedUsers(req, res) {
   }
 }
 
+
+
 async function getFriends(req, res) {
   try {
     const userId = req.user._id;
-    const friends = await User.findById(userId)
+    const user = await User.findById(userId)
       .select("friends")
       .populate(
         "friends",
         "fullName profilePicture nativeLanguage learningLanguage"
       );
 
-    res.status(200).json({ friends });
+    return res.status(200).json({ friends: user.friends }); // <-- send only the array
   } catch (error) {
     console.error("Error fetching friends:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 }
 
+
 async function sendFriendRequest(req, res) {
   try {
-    const { userId } = req.params;
+    // Remove colon and trim spaces if present
+    let { userId } = req.params;
+    userId = userId.replace(/^:/, "").trim();
+
     const currentUserId = req.user._id;
+    // console.log("Sanitized userId:", userId);
 
     if (userId === currentUserId.toString()) {
       return res
@@ -79,13 +97,13 @@ async function sendFriendRequest(req, res) {
     });
 
     res.status(201).json({
-        message: "Friend request sent successfully",
-        friendRequest: {
-            _id: friendRequest._id,
-            sender: currentUserId,
-            recipient: userId,
-        },
-    })
+      message: "Friend request sent successfully",
+      friendRequest: {
+        _id: friendRequest._id,
+        sender: currentUserId,
+        recipient: userId,
+      },
+    });
 
   } catch (error) {
     console.error("Error sending friend request:", error);
@@ -93,47 +111,54 @@ async function sendFriendRequest(req, res) {
   }
 }
 
-async function acceptFriendRequest(req, res) {
-    try {
-        const userId = req.params.userId;
-        const currentUserId = req.user._id;
 
-        const friendRequest = await FriendRequest.findById(userId);
-        if(!friendRequest) {
-            return res.status(404).json({ message: "Friend request not found" });
-        }
+async function acceptFriendRequest(req, res) { 
+  try { 
+    const requestId = req.params.userId.replace(/^:/, ""); // remove leading colon if present
+    // const friendRequest = await FriendRequest.findById(requestId);
 
-        if(friendRequest.recipient.toString() !== currentUserId.toString()) {
-            return res.status(403).json({ message: "You are not authorized to accept this friend request" });
-        }
+    const currentUserId = req.user._id;
 
-        friendRequest.status = "accepted";
-        await friendRequest.save();
-
-        // $addtoSet ensures that the user is added to the friends list only if not already present
-
-        await User.findByIdAndUpdate(friendRequest.sender, {
-            $addToSet: { friends: friendRequest.recipient }
-        })
-
-        await User.findByIdAndUpdate(friendRequest.recipient, {
-            $addToSet: { friends: friendRequest.sender }
-        })
-
-        res.status(200).json({
-            message: "Friend request accepted successfully",
-            friendRequest
-        })
-
-    } catch (error) {
-        console.error("Error accepting friend request:", error);
-        res.status(500).json({ message: "Internal server error" });
-        
+    const friendRequest = await FriendRequest.findById(requestId);
+    if (!friendRequest) {
+      return res.status(404).json({ message: "Friend request not found" });
     }
+
+    if (friendRequest.recipient.toString() !== currentUserId.toString()) {
+      return res.status(403).json({ message: "You are not authorized to accept this friend request" });
+    }
+
+    friendRequest.status = "accepted";
+    await friendRequest.save();
+
+    await User.findByIdAndUpdate(friendRequest.sender, {
+      $addToSet: { friends: friendRequest.recipient }
+    });
+
+    await User.findByIdAndUpdate(friendRequest.recipient, {
+      $addToSet: { friends: friendRequest.sender }
+    });
+
+    res.status(200).json({ 
+      message: "Friend request accepted successfully", 
+      friendRequest 
+    });
+
+  } catch (error) {
+    console.error("Error accepting friend request:", error);
+    res.status(500).json({ message: "Internal server error" });
+  } 
 }
+
+
+
+
+
+
 
 async function getFriendRequests(req, res) {
     try {
+      
         const incomingRequest = await FriendRequest.find({
             recipient: req.user._id,
             status: "pending"

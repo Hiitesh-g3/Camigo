@@ -14,7 +14,7 @@ router.post("/friend-request/:userId", sendFriendRequest);
 
 router.put("/friend-request/:userId", acceptFriendRequest);
 
-router.get("friend-requests", getFriendRequests);
+router.get("/friend-requests", getFriendRequests);
 
 router.get("/outgoing-requests", getOutgoingFriendRequests);
 
